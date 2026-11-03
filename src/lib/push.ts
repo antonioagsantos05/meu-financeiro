@@ -2,6 +2,29 @@ import { supabase } from './supabase'
 export const pushConfigured =
   import.meta.env.VITE_PUSH_ENABLED === 'true' &&
   !!import.meta.env.VITE_VAPID_PUBLIC_KEY
+export async function testNotification() {
+  if (
+    !window.isSecureContext ||
+    !('serviceWorker' in navigator) ||
+    !('Notification' in window)
+  )
+    throw new Error(
+      'Abra em localhost ou HTTPS em um navegador com notificações.',
+    )
+  const permission = await Notification.requestPermission()
+  if (permission !== 'granted')
+    throw new Error(
+      'Permita as notificações nas configurações deste site no navegador.',
+    )
+  await navigator.serviceWorker.register('/sw.js')
+  const registration = await navigator.serviceWorker.ready
+  await registration.showNotification('Meu Financeiro', {
+    body: 'Teste de notificação. Que tal revisar seu dia?',
+    icon: '/icon-192.png',
+    tag: 'notification-test',
+    data: { url: '/movimentos/novo' },
+  })
+}
 export async function enablePush() {
   if (!supabase || !pushConfigured)
     throw new Error(

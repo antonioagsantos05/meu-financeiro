@@ -14,7 +14,7 @@ npm.cmd run dev
 
 1. Crie um projeto Supabase na sua conta. Confira limites e custos do plano e guarde a senha do banco fora do repositório.
 2. Em Authentication, desabilite novos cadastros públicos e login anônimo. Crie o único usuário administrativamente. Não há signup no aplicativo.
-3. Execute no SQL Editor, nesta ordem, `supabase/migrations/202611030001_initial.sql` e `202611030002_push.sql`. Também é possível aplicar com a CLI Supabase.
+3. Execute no SQL Editor, nesta ordem, `supabase/migrations/202611030001_initial.sql`, `202611030002_push.sql` e `202611030003_santander_cash_account.sql`. Também é possível aplicar com a CLI Supabase. Se já executou `setup.sql`, aplique somente a migração `202611030003_santander_cash_account.sql`.
 4. Preencha `.env.local` com URL do projeto e chave pública anon/publishable:
 
 ```dotenv

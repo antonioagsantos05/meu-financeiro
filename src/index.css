@@ -848,6 +848,31 @@ main {
 .credit-card h2 {
   margin: 30px 0 10px;
 }
+.credit-card .bank-period-total {
+  font-size: 30px;
+  font-weight: 650;
+  margin: 14px 0 8px;
+}
+.credit-card {
+  background: #1c1e22;
+  border-color: #34383e;
+}
+.cash-reality {
+  padding: 24px;
+  margin-bottom: 24px;
+  border-left: 3px solid #d8b66a;
+}
+.cash-reality p {
+  color: #b7bec6;
+  margin: 0 0 12px;
+}
+.cash-reality h2 {
+  font-size: 34px;
+  margin: 0 0 12px;
+}
+.cash-reality small {
+  color: #9da6b0;
+}
 .credit-card p {
   font-size: 11px;
   margin-bottom: 8px;
@@ -1581,5 +1606,326 @@ footer > span {
 @media (max-width: 450px) {
   .calendar-cell small {
     font-size: 6px;
+  }
+}
+.inline-tag {
+  display: flex;
+  gap: 8px;
+  margin-top: 15px;
+}
+.inline-tag input {
+  flex: 1;
+  min-width: 0;
+}
+.inline-tag .secondary {
+  padding: 10px;
+  font-size: 11px;
+}
+.advanced-fields {
+  margin: 0 0 18px;
+  border: 1px solid #30363b;
+  border-radius: 7px;
+  padding: 12px;
+}
+.advanced-fields summary,
+.forecast-details summary {
+  cursor: pointer;
+  color: #a5b6aa;
+  font-size: 11px;
+}
+.advanced-fields[open] summary {
+  margin-bottom: 15px;
+}
+.advanced-fields .field {
+  margin-bottom: 0;
+}
+.payment-account {
+  margin: 5px 0 16px;
+}
+.tag-picker label {
+  border: 1px solid #39433c;
+  border-radius: 15px;
+  padding: 6px 10px;
+}
+.tag-picker label:has(input:checked) {
+  border-color: #4ade80;
+  background: #24402c;
+  color: #b9edc8;
+}
+.forecast-details {
+  border-top: 1px solid #30363b;
+}
+.forecast-details summary {
+  padding: 16px 20px;
+}
+.forecast-planner {
+  border-top: 1px solid #30353a;
+  padding: 22px;
+}
+.calendar-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.calendar-toolbar h3 {
+  text-transform: capitalize;
+  margin: 0;
+  font-size: 20px;
+}
+.calendar-hint {
+  font-size: 11px;
+  margin: 14px 0 24px;
+}
+.planner-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(250px, 1fr);
+  gap: 24px;
+}
+.planner-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+  align-content: start;
+}
+.weekday {
+  text-align: center;
+  font-size: 10px;
+  color: #8a9990;
+  padding-bottom: 10px;
+}
+.planner-cell {
+  min-height: 78px;
+  text-align: left;
+  border: 1px solid #303a33;
+  border-radius: 8px;
+  padding: 10px;
+  background: #212624;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+.planner-cell > span {
+  font-size: 12px;
+  color: #c2ccc5;
+}
+.planner-cell > strong {
+  font-size: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: -0.3px;
+}
+.planner-cell > small {
+  font-size: 8px;
+  color: #8c9f92;
+}
+.planner-cell.selected {
+  border-color: #4ade80;
+  background: #293c2e;
+  box-shadow: 0 0 0 1px #4ade80;
+}
+.planner-cell.is-today > span {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.planner-cell:disabled {
+  background: transparent;
+  border-color: transparent;
+  opacity: 0.3;
+  cursor: default;
+}
+.day-agenda {
+  padding: 20px;
+  background: #171c19;
+  border-radius: 9px;
+  border: 1px solid #344338;
+}
+.day-agenda > h3 {
+  font-size: 29px;
+  margin: 15px 0 7px;
+}
+.day-agenda > .eyebrow {
+  font-size: 9px;
+}
+.agenda-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 0;
+  border-bottom: 1px solid #303831;
+  font-size: 11px;
+}
+.agenda-item > div {
+  flex: 1;
+}
+.agenda-item strong {
+  font-weight: 500;
+}
+.agenda-item small {
+  display: block;
+  font-size: 9px;
+  margin-top: 6px;
+}
+.agenda-item > span {
+  white-space: nowrap;
+  font-size: 11px;
+}
+@media (max-width: 1100px) {
+  .planner-columns {
+    grid-template-columns: 1fr;
+  }
+  .planner-cell > strong {
+    font-size: 10px;
+  }
+}
+@media (max-width: 550px) {
+  .forecast-planner {
+    padding: 12px;
+  }
+  .planner-grid {
+    gap: 3px;
+  }
+  .planner-cell {
+    padding: 7px 3px;
+    min-height: 66px;
+    gap: 7px;
+  }
+  .planner-cell > strong {
+    font-size: 7px;
+  }
+  .planner-cell > small {
+    font-size: 6px;
+  }
+  .calendar-toolbar h3 {
+    font-size: 16px;
+  }
+  .transaction {
+    flex-wrap: wrap;
+  }
+  .transaction-info {
+    min-width: 120px;
+  }
+  .transaction .secondary {
+    padding: 7px;
+    font-size: 9px;
+    min-height: 28px;
+  }
+}
+
+.date-range-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.period-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.period-month {
+  display: flex;
+  align-items: center;
+  border: 1px solid #34383e;
+  border-radius: 9px;
+  background: #15171a;
+  overflow: hidden;
+}
+.period-month button {
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: #aeb7bf;
+  cursor: pointer;
+}
+.period-month button:hover {
+  background: #25292e;
+  color: #fff;
+}
+.filters .period-month input,
+.period-month input {
+  border: 0;
+  background: transparent;
+  padding: 9px 6px;
+  width: 168px;
+  min-width: 0;
+  font-size: 13px;
+}
+.period-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 0;
+  color: #a5afb9;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 8px 0;
+}
+.period-custom:hover,
+.period-custom[aria-expanded='true'] {
+  color: #36db78;
+}
+.date-boundaries {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.date-boundaries label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9caaa2;
+  font-size: 11px;
+}
+.date-boundaries input {
+  min-width: 145px;
+}
+.calendar-month-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 9px;
+  color: #9daf9f;
+  flex: 1;
+  max-width: 260px;
+}
+.calendar-month-select select {
+  text-transform: capitalize;
+  font-size: 16px;
+}
+.fixed-totals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 22px;
+  border-bottom: 1px solid #30363a;
+}
+.fixed-totals strong {
+  display: block;
+  font-size: 24px;
+  margin-top: 12px;
+}
+.fixed-totals small {
+  font-size: 11px;
+}
+@media (max-width: 550px) {
+  .fixed-totals {
+    grid-template-columns: 1fr;
+  }
+  .calendar-month-select select {
+    font-size: 12px;
+  }
+  .date-boundaries label {
+    flex: 1;
+  }
+  .date-boundaries input {
+    width: 100%;
+    min-width: 0;
   }
 }

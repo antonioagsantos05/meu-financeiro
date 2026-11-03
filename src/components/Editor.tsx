@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { X } from 'lucide-react'
 import type { Modal } from '../App'
-import type { Data } from '../domain/types'
+import type { Data, Tag } from '../domain/types'
 import { cents, today } from '../lib/money'
 const raw = (v: unknown) => (Number(v || 0) / 100).toFixed(2).replace('.', ',')
 const field = (name: string, node: ReactNode) => (
@@ -18,6 +18,7 @@ export function Editor({
   error,
   close,
   save,
+  createTag,
 }: {
   modal: Modal
   data: Data
@@ -25,12 +26,56 @@ export function Editor({
   error: string
   close: () => void
   save: (op: string, payload: Record<string, unknown>) => Promise<void>
+  createTag: (name: string) => Promise<Tag>
 }) {
   const { type, item } = modal
+  const cashAccounts = data.accounts.filter(
+    (account) => account.bank_code === 'Santander' && account.active,
+  )
   const [kind, setKind] = useState(String(item?.kind || 'expense')),
     [method, setMethod] = useState(String(item?.payment_method || 'pix')),
     [validation, setValidation] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const [tagName, setTagName] = useState('')
+  const [tagBusy, setTagBusy] = useState(false)
+  const [addedTags, setAddedTags] = useState<Tag[]>([])
+  const [selectedTags, setSelectedTags] = useState<string[]>(
+    (item?.tag_ids as string[]) || [],
+  )
+  const [movementDate, setMovementDate] = useState(
+    String(item?.occurred_on || today()),
+  )
+  const allTags = [
+    ...data.tags,
+    ...addedTags.filter(
+      (tag) => !data.tags.some((existing) => existing.id === tag.id),
+    ),
+  ]
+  async function addTag() {
+    const name = tagName.trim()
+    if (!name || tagBusy) return
+    setValidation('')
+    setTagBusy(true)
+    try {
+      const existing = allTags.find(
+        (tag) =>
+          tag.name.trim().toLocaleLowerCase('pt-BR') ===
+          name.toLocaleLowerCase('pt-BR'),
+      )
+      const tag = existing || (await createTag(name))
+      if (!existing) setAddedTags((tags) => [...tags, tag])
+      setSelectedTags((tags) =>
+        tags.includes(tag.id) ? tags : [...tags, tag.id],
+      )
+      setTagName('')
+    } catch (e) {
+      setValidation(
+        e instanceof Error ? e.message : 'Não foi possível criar a tag.',
+      )
+    } finally {
+      setTagBusy(false)
+    }
+  }
   useEffect(() => {
     const previous = document.activeElement as HTMLElement
     ref.current?.querySelector<HTMLElement>('input,select,button')?.focus()
@@ -60,9 +105,19 @@ export function Editor({
     }
   }, [busy, close])
   const accounts = (name = 'account_id', value?: unknown) => (
-    <select name={name} defaultValue={String(value || '')} required>
-      <option value="">Selecione a conta</option>
-      {data.accounts.map((a) => (
+    <select
+      name={name}
+      defaultValue={String(
+        value || (cashAccounts.length === 1 ? cashAccounts[0].id : ''),
+      )}
+      required
+    >
+      <option value="">
+        {cashAccounts.length
+          ? 'Selecione a conta Santander'
+          : 'Cadastre sua conta Santander'}
+      </option>
+      {cashAccounts.map((a) => (
         <option key={a.id} value={a.id}>
           {a.name}
         </option>
@@ -82,7 +137,7 @@ export function Editor({
           version: item?.version,
         }
       if (type === 'transaction') {
-        op = item ? 'update_transaction' : 'create_transaction'
+        op = item?.id ? 'edit_financial_event' : 'create_transaction'
         const m =
           kind === 'transfer' ? 'transfer' : kind === 'income' ? 'pix' : method
         p = {
@@ -93,8 +148,27 @@ export function Editor({
           card_id: m === 'credit' ? v.card_id : null,
           destination_account_id:
             kind === 'transfer' ? v.destination_account_id : null,
-          tag_ids: f.getAll('tag_ids'),
+          tag_ids: selectedTags,
           installment_count: Number(v.installment_count || 1),
+          status: 'confirmed',
+        }
+        if (item?.id)
+          p = {
+            ...p,
+            entity: 'transaction',
+            name: v.description,
+            date: v.occurred_on,
+          }
+      } else if (type === 'event_edit') {
+        op = 'edit_financial_event'
+        p = {
+          ...p,
+          id: item?.original_id || item?.id,
+          entity: item?.event_type,
+          name: v.name,
+          amount_cents: cents(String(v.amount)),
+          date: v.date,
+          account_id: v.account_id,
         }
       } else if (type === 'account') {
         op = 'save_account'
@@ -120,6 +194,7 @@ export function Editor({
           ...p,
           amount_cents: cents(String(v.amount)),
           day: Number(v.day),
+          tag_ids: selectedTags,
           active: f.has('active'),
         }
       } else if (type === 'reminder') {
@@ -135,13 +210,21 @@ export function Editor({
           issuer_confirmed: f.has('issuer_confirmed'),
         }
       } else if (type === 'delete') op = 'delete_transaction'
+      else if (
+        [
+          'reverse_payment',
+          'confirm_transaction',
+          'unconfirm_transaction',
+        ].includes(type)
+      )
+        op = type
       await save(op, p)
     } catch (e) {
       setValidation(e instanceof Error ? e.message : 'Dados inválidos.')
     }
   }
   const titles: Record<string, string> = {
-    transaction: item ? 'Editar movimento' : 'Novo movimento',
+    transaction: item?.id ? 'Editar movimento' : 'Novo movimento',
     account: 'Conta bancária',
     card: 'Adicionar cartão',
     tag: 'Tag',
@@ -150,6 +233,11 @@ export function Editor({
     payment: 'Pagar fatura',
     settlement: 'Quitação antecipada',
     delete: 'Excluir movimento',
+    event_edit: 'Editar movimento',
+    reverse_payment: 'Desfazer pagamento',
+    confirm_transaction:
+      kind === 'income' ? 'Confirmar recebimento' : 'Confirmar pagamento',
+    unconfirm_transaction: 'Desfazer confirmação',
   }
   return (
     <div
@@ -189,18 +277,22 @@ export function Editor({
                   value={kind}
                   onChange={(e) => setKind(e.target.value)}
                 >
-                  <option value="expense">Despesa</option>
-                  <option value="income">Receita</option>
+                  <option value="expense">Saída</option>
+                  <option value="income">Entrada</option>
                   <option value="transfer">Transferência</option>
                 </select>,
               )}
               {field(
-                'Descrição',
+                'Nome',
                 <input
                   name="description"
                   required
                   maxLength={200}
-                  placeholder="O que aconteceu?"
+                  placeholder={
+                    kind === 'income'
+                      ? 'Ex.: Salário'
+                      : 'Ex.: Mercado, almoço, Uber'
+                  }
                   defaultValue={String(item?.description || '')}
                 />,
               )}
@@ -221,21 +313,12 @@ export function Editor({
                     name="occurred_on"
                     type="date"
                     required
-                    defaultValue={String(item?.occurred_on || today())}
+                    value={movementDate}
+                    onChange={(e) => setMovementDate(e.target.value)}
                   />,
                 )}
               </div>
-              {field(
-                'Status',
-                <select
-                  name="status"
-                  defaultValue={String(item?.status || 'confirmed')}
-                >
-                  <option value="confirmed">Confirmado</option>
-                  <option value="scheduled">Agendado</option>
-                  <option value="estimated">Estimado</option>
-                </select>,
-              )}
+              <input type="hidden" name="status" value="confirmed" />
               {kind === 'expense' &&
                 field(
                   'Forma de pagamento',
@@ -282,6 +365,15 @@ export function Editor({
                     />,
                   )}
                 </>
+              ) : cashAccounts.length === 1 && kind !== 'transfer' ? (
+                <div className="payment-account">
+                  <input
+                    type="hidden"
+                    name="account_id"
+                    value={cashAccounts[0].id}
+                  />
+                  <small>Conta: {cashAccounts[0].name}</small>
+                </div>
               ) : (
                 field(
                   kind === 'transfer' ? 'Conta de origem' : 'Conta',
@@ -296,28 +388,94 @@ export function Editor({
                     item?.destination_account_id,
                   ),
                 )}
-              <fieldset>
-                <legend>Tags opcionais</legend>
-                <div className="tag-picker">
-                  {data.tags.map((t) => (
-                    <label key={t.id}>
-                      <input
-                        name="tag_ids"
-                        type="checkbox"
-                        value={t.id}
-                        defaultChecked={(
-                          (item?.tag_ids as string[]) || []
-                        ).includes(t.id)}
-                      />
-                      {t.name}
-                    </label>
-                  ))}
-                  {!data.tags.length && (
-                    <small>Crie tags na tela Movimentos.</small>
-                  )}
-                </div>
-              </fieldset>
             </>
+          )}
+          {type === 'event_edit' && (
+            <>
+              {field(
+                'Nome',
+                <input
+                  name="name"
+                  required
+                  defaultValue={String(item?.description || '')}
+                />,
+              )}
+              {field(
+                item?.event_type === 'invoice'
+                  ? 'Valor total da fatura (R$)'
+                  : 'Valor (R$)',
+                <input
+                  name="amount"
+                  required
+                  inputMode="decimal"
+                  defaultValue={raw(item?.amount_cents)}
+                />,
+              )}
+              {field(
+                'Data',
+                <input
+                  name="date"
+                  type="date"
+                  required
+                  max={item?.event_type === 'payment' ? today() : undefined}
+                  defaultValue={String(item?.occurred_on || today())}
+                />,
+              )}
+              {item?.event_type === 'payment' &&
+                field('Conta', accounts('account_id', item?.account_id))}
+              <p className="footnote">
+                A alteração fica registrada no histórico. Valores futuros
+                respeitam a data informada.
+              </p>
+            </>
+          )}
+          {['transaction', 'recurrence'].includes(type) && (
+            <fieldset>
+              <legend>Tags opcionais</legend>
+              <div className="tag-picker">
+                {allTags.map((t) => (
+                  <label key={t.id}>
+                    <input
+                      name="tag_ids"
+                      type="checkbox"
+                      value={t.id}
+                      checked={selectedTags.includes(t.id)}
+                      onChange={(e) =>
+                        setSelectedTags((tags) =>
+                          e.target.checked
+                            ? [...tags, t.id]
+                            : tags.filter((id) => id !== t.id),
+                        )
+                      }
+                    />
+                    {t.name}
+                  </label>
+                ))}
+              </div>
+              <div className="inline-tag">
+                <input
+                  aria-label="Nova tag"
+                  placeholder="Digite uma nova tag"
+                  value={tagName}
+                  maxLength={60}
+                  onChange={(e) => setTagName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void addTag()
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={tagBusy || busy || !tagName.trim()}
+                  onClick={() => void addTag()}
+                >
+                  {tagBusy ? 'Criando…' : '+ Criar tag'}
+                </button>
+              </div>
+            </fieldset>
           )}
           {type === 'account' && (
             <>
@@ -334,7 +492,7 @@ export function Editor({
                 'Banco',
                 <select
                   name="bank_code"
-                  defaultValue={String(item?.bank_code || 'Nubank')}
+                  defaultValue={String(item?.bank_code || 'Santander')}
                 >
                   {['Nubank', 'Santander', 'Itaú'].map((b) => (
                     <option key={b}>{b}</option>
@@ -358,6 +516,11 @@ export function Editor({
                 />,
               )}
               <p className="footnote">
+                Santander é a conta para PIX, débito e movimentações bancárias.
+                Nubank e Itaú ficam com saldo de conta zero; cadastre suas
+                compras no crédito em Cartões.
+              </p>
+              <p className="footnote">
                 Use valores reais confirmados. O saldo inicial fica bloqueado
                 após a primeira movimentação; correções posteriores são
                 lançamentos de ajuste.
@@ -372,9 +535,14 @@ export function Editor({
               )}
               {field(
                 'Conta prevista para pagamento',
-                <select name="account_id">
+                <select
+                  name="account_id"
+                  defaultValue={
+                    cashAccounts.length === 1 ? cashAccounts[0].id : ''
+                  }
+                >
                   <option value="">Sem vínculo — somente consolidado</option>
-                  {data.accounts.map((a) => (
+                  {cashAccounts.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
                     </option>
@@ -579,6 +747,29 @@ export function Editor({
               )}
             </>
           )}
+          {type === 'confirm_transaction' &&
+            field(
+              'Data efetiva',
+              <input
+                name="paid_on"
+                type="date"
+                required
+                max={today()}
+                defaultValue={today()}
+              />,
+            )}
+          {['reverse_payment', 'unconfirm_transaction'].includes(type) && (
+            <>
+              <p>
+                {String(item?.description || '')}. O registro será preservado no
+                histórico e o saldo será recalculado.
+              </p>
+              {field(
+                'Motivo',
+                <textarea name="reason" required maxLength={500} />,
+              )}
+            </>
+          )}
           {type === 'delete' && (
             <>
               <p>
@@ -605,7 +796,7 @@ export function Editor({
             >
               Cancelar
             </button>
-            <button className="primary" disabled={busy}>
+            <button className="primary" disabled={busy || tagBusy}>
               {busy
                 ? 'Salvando…'
                 : type === 'delete'

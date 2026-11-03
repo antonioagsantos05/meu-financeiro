@@ -1,0 +1,153 @@
+Especificação de Negócio
+Visão de produto, regras financeiras e critérios de aceite
+Projeto: Meu Financeiro  |  Versão: 1.0 — especificação para implementação por IA  |  Data: 03/11/2026
+Status: base aprovada em conversa; itens marcados como DECISÃO PENDENTE não devem ser presumidos pelo agente de desenvolvimento.
+1. Objetivo, escopo e princípios
+Aplicativo pessoal e privado de controle financeiro, com registro manual, visão consolidada de três bancos, cartões, recorrências, projeções diárias e lembretes. Priorizar confiabilidade contábil, rapidez no celular e ausência de cobranças duplicadas.
+Usuário único, sem cadastro público; experiência Android via PWA instalável.
+Bancos iniciais: Nubank, Santander e Itaú. PIX é método de pagamento, não quarta conta.
+Versão 1.0 sem integração bancária/Open Finance; possível evolução futura.
+Interface dark minimalista: fundo #101114, superfícies #1C1E22, verde #22C55E / #4ADE80.
+Idioma pt-BR, moeda BRL, fuso America/Sao_Paulo.
+2. Personas e jornadas
+Persona única: titular que deseja lançar despesas em segundos, acompanhar contas, antecipar aperto de caixa e evitar esquecimentos. Jornada principal: entrar → visualizar saldo/projeção → registrar gasto → escolher PIX/débito/crédito e banco/cartão → salvar → acompanhar fatura ou baixa em conta.
+3. Navegação e módulos
+Tela
+Função principal
+Login
+Acesso exclusivo e recuperação de acesso
+Início
+Saldo por conta, consolidado, próximos vencimentos, projeção
+Movimentos
+Lista, busca, filtros, criar/editar/excluir, tags
+Futuro
+Calendário e linha do tempo de saldo projetado
+Cartões
+Faturas, fechamento/vencimento, parcelas, pagamento
+Contas
+Três bancos, saldos, transferências e ajustes
+Recorrências
+Despesas e recebimentos mensais; pausar/editar
+Relatórios
+Períodos, tags, forma de pagamento, previsto vs. realizado
+Lembretes
+Criar/editar/excluir horários e dias; revisão diária
+Configurações
+Perfil, segurança, exportação, preferências
+Navegação inferior: Início, Movimentos, Futuro e Menu. Menu: Cartões, Contas, Recorrências, Relatórios, Lembretes e Configurações.
+4. Requisitos funcionais (RF)
+ID
+Requisito
+RF-001
+Login/logout e acesso privado, sem signup público.
+RF-002
+Gerenciar contas Nubank, Santander e Itaú e saldos iniciais.
+RF-003
+Registrar receitas, despesas e transferências com data e status.
+RF-004
+Selecionar forma PIX, débito ou crédito; para PIX/débito exigir conta; para crédito exigir cartão.
+RF-005
+Registrar compras parceladas com número de parcelas e distribuição por fatura.
+RF-006
+Editar dados, tags e parcelamento respeitando pagamentos confirmados.
+RF-007
+Excluir lançamentos incorretos com confirmação e trilha de auditoria.
+RF-008
+Quitar antecipadamente com valor real, data, origem e cancelamento/ajuste das parcelas futuras.
+RF-009
+Gerenciar cartões, fechamento, vencimento, faturas e pagamentos.
+RF-010
+Gerenciar recorrências de receitas/despesas, inclusive salário mensal.
+RF-011
+Exibir saldo real e saldo projetado por dia, com calendário.
+RF-012
+Projetar cheque especial, com juros/IOF somente se taxas parametrizadas.
+RF-013
+Tags opcionais, múltiplas, editáveis, excluíveis; filtros e relatórios.
+RF-014
+Buscar, filtrar e agrupar movimentos por período, banco, cartão, status e tags.
+RF-015
+Criar/editar/excluir/habilitar lembretes; horários e dias configuráveis.
+RF-016
+Lembretes iniciais às 13h30 e 20h; toque abre lançamento rápido.
+RF-017
+Revisão diária inclusive dia sem gastos; acompanhamento de sequência.
+RF-018
+Exportar dados e permitir restauração/importação somente após especificação de formato.
+RF-019
+Simular cenários sem alterar transações reais.
+RF-020
+Exibir relatórios sem duplicar gastos multitag ou faturas.
+5. Regras de negócio (RN)
+ID
+Regra
+RN-001
+Cada lançamento tem owner_id e pertence ao titular autenticado.
+RN-002
+PIX/débito afetam a conta selecionada na data efetiva; crédito afeta fatura, não conta imediatamente.
+RN-003
+Pagamento da fatura gera uma saída bancária única; compras não geram segunda saída.
+RN-004
+Transferências entre contas próprias não são receita nem despesa consolidada.
+RN-005
+Valores monetários são centavos inteiros; parcelas somam exatamente o valor total, distribuindo resíduos.
+RN-006
+Parcelas pagas/faturas liquidadas não podem ser reescritas silenciosamente; usar ajuste/reversão auditável.
+RN-007
+Quitação registra valor efetivo, data e conta/cartão de origem; fecha pendências sem apagar histórico.
+RN-008
+Para cartão, quitação no app apenas espelha operação real do emissor; não antecipa parcelas junto ao banco.
+RN-009
+Recebimentos previstos não aumentam saldo real antes da confirmação.
+RN-010
+Recorrências geram ocorrências únicas por competência; edição pode valer só para futuras.
+RN-011
+Tags: Comida, Uber, Compras Pessoais, Entretenimento, Família; zero a N tags; sem categoria obrigatória.
+RN-012
+Soma consolidada considera cada transação uma vez; grupos por tags podem se sobrepor e devem avisar.
+RN-013
+Excluir uma tag não exclui o movimento; definir política de remoção lógica para preservar histórico.
+RN-014
+Lembretes respeitam fuso, dias, permissão push e deduplicação; entrega não é garantida offline.
+RN-015
+Projeções exibem premissas, saldos de abertura e distinguem realizado, agendado e estimado.
+RN-016
+Cheque especial é crédito disponível, não dinheiro próprio; saldo negativo permanece visível.
+6. Cenários de aceitação (Given / When / Then)
+ID
+Critério verificável
+AC-01
+Dado gasto PIX de R$ 50 no Nubank; quando confirmado; então saldo do Nubank cai R$ 50 e Santander/Itaú não mudam.
+AC-02
+Dada compra no crédito de R$ 600 em 3x; quando salva; então há 3 parcelas de R$ 200 nas faturas e nenhuma saída bancária imediata.
+AC-03
+Dada fatura de R$ 600; quando paga via Santander; então o Santander cai R$ 600 uma vez e a fatura fica paga.
+AC-04
+Dada compra 3x com uma parcela paga; quando quitada com desconto; então registra-se valor efetivo, mantém-se histórico e zeram-se pendências sem duplicidade.
+AC-05
+Dada despesa com tags Comida e Família; quando filtrada em ambos os grupos; então pode aparecer nos dois, mas total geral inclui apenas uma vez.
+AC-06
+Dado salário recorrente previsto; quando ainda não recebido; então só altera projeção, não saldo real.
+AC-07
+Dado lembrete às 20h; quando já enviado naquele dia; então nova execução do agendador não duplica o envio.
+AC-08
+Dado lançamento pago; quando editado; então o sistema bloqueia alteração destrutiva ou cria ajuste rastreável.
+AC-09
+Dada transferência de R$ 100 Nubank→Itaú; quando confirmada; então saldo consolidado permanece igual.
+AC-10
+Dado lançamento incorreto; quando excluído; então some das visões ativas, mantém trilha e projeções recalculam.
+7. Dados ilustrativos para testes — NÃO migrar como fatos confirmados
+Saldo informado em 03/11/2026: R$ 58,01 e limite de cheque especial de R$ 4.000 (associação à conta ainda não confirmada). Salário recorrente estimado de R$ 6.000/mês, data exata a confirmar. Exemplos de despesas: psicólogo R$ 180 por sessão; empréstimo R$ 688; faturas e outras obrigações citadas em conversa. Estimativa de 13º R$ 4.016,32 não validada. Dentista em dezembro informado como R$ 417 ou R$ 427: NÃO assumir valor. Esses números são seeds opcionais, não lançamentos reais automáticos.
+8. Priorização e fora de escopo
+MVP obrigatório: login, contas, movimentos, crédito/parcelas/faturas, quitação, recorrências, projeções, tags, lembretes configuráveis, relatórios básicos, exportação.
+Pós-MVP: importação CSV/OFX, integrações bancárias/Open Finance, automações avançadas e otimizações offline.
+Não armazenar senhas bancárias, tokens de instituições ou credenciais financeiras de terceiros.
+9. Decisões pendentes — bloquear suposições
+Definir saldos iniciais por banco, a qual conta pertence o cheque especial e respectivos encargos.
+Confirmar quais cartões existem e vínculo exato com Nubank/Santander/Itaú; datas de fechamento/vencimento.
+Definir se dinheiro físico será uma quarta forma de pagamento e se haverá conta Carteira.
+Confirmar política de quitação de cartão e representação de antecipação com desconto/juros.
+Confirmar offline-first vs. somente online, política de backup/restauração e retenção.
+Validar provedor e custo de agendamento Web Push e limitações no Android.
+10. Definição de pronto
+Uma funcionalidade só é pronta com UI utilizável, persistência real, isolamento por RLS, testes automatizados das regras, estados vazio/carregando/erro, edição/exclusão quando aplicável, responsividade e critérios de aceite aprovados. Não considerar protótipos com estado local como funcionalidades concluídas.

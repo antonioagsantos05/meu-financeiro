@@ -28,9 +28,20 @@ import { money, cents, today } from './lib/money'
 import { emptyData } from './domain/types'
 import type { Data, Transaction } from './domain/types'
 import { Editor } from './components/Editor'
+import { ImportedFinance } from './components/ImportedFinance'
 import './App.css'
-import { enablePush, disablePush, pushConfigured } from './lib/push'
+import {
+  enablePush,
+  disablePush,
+  pushConfigured,
+  testNotification,
+} from './lib/push'
 import { reviewStreak } from './lib/reviews'
+import { movementEvents, cashReport, isLoan } from './lib/ledger'
+import { Obligations } from './components/Obligations'
+import { DateRangePicker } from './components/DateRangePicker'
+import { FixedExpenses } from './components/FixedExpenses'
+import { ForecastCalendar } from './components/ForecastCalendar'
 export type Modal = { type: string; item?: Record<string, unknown> }
 const nav = [
   { name: 'Início', icon: LayoutDashboard },
@@ -51,6 +62,7 @@ const statuses: Record<string, string> = {
   partial: 'Parcial',
   paid: 'Paga',
   settled: 'Quitado',
+  reversed: 'Desfeito',
 }
 const date = (s: string) =>
   new Date(s + 'T12:00:00').toLocaleDateString('pt-BR', {
@@ -116,7 +128,13 @@ export default function App() {
     [tag, setTag] = useState(''),
     [card, setCard] = useState('')
   const [from, setFrom] = useState(today().slice(0, 7) + '-01'),
-    [until, setUntil] = useState(today()),
+    [until, setUntil] = useState(
+      new Date(
+        Date.UTC(Number(today().slice(0, 4)), Number(today().slice(5, 7)), 0),
+      )
+        .toISOString()
+        .slice(0, 10),
+    ),
     [scenario, setScenario] = useState('0,00'),
     [forecast, setForecast] = useState<Forecast[]>([])
   const [mode, setMode] = useState('login')
@@ -142,6 +160,14 @@ export default function App() {
     if (!supabase) return
     setLoading(true)
     try {
+      const horizon = new Date(today() + 'T12:00:00Z')
+      horizon.setUTCDate(horizon.getUTCDate() + 90)
+      const { error: prepareError } = await supabase.rpc(
+        'prepare_financial_horizon',
+        { start_on: today(), end_on: horizon.toISOString().slice(0, 10) },
+      )
+      if (prepareError && !['PGRST202', '42883'].includes(prepareError.code))
+        throw prepareError
       const entries = await Promise.all(
         Object.keys(emptyData).map(async (table) => {
           const rows: unknown[] = []
@@ -154,7 +180,14 @@ export default function App() {
             if (table === 'transactions' || table === 'tags')
               q = q.is('deleted_at', null)
             const { data, error } = await q
-            if (error) throw error
+            if (error) {
+              if (
+                table === 'financial_import_records' &&
+                ['PGRST205', '42P01'].includes(error.code)
+              )
+                break
+              throw error
+            }
             rows.push(...data)
             if (data.length < 1000) break
           }
@@ -194,17 +227,40 @@ export default function App() {
     setError('')
     setModal({ type, item: item as Record<string, unknown> })
   }
+  const closeModal = useCallback(() => setModal(null), [])
   async function command(
     operation: string,
     payload: Record<string, unknown>,
     key = crypto.randomUUID(),
   ) {
     if (!supabase) throw Error('Configure o Supabase.')
-    const { error } = await supabase.rpc('command', {
-      operation,
-      payload,
-      request_key: key,
-    })
+    if (operation === 'edit_financial_event') {
+      const { entity, id, version, ...patch } = payload
+      const { error } = await supabase.rpc('edit_financial_event', {
+        entity,
+        entity_id: id,
+        expected_version: version,
+        patch,
+        request_key: key,
+      })
+      if (error) throw error
+      return
+    }
+    const managed = [
+      'reverse_payment',
+      'confirm_transaction',
+      'unconfirm_transaction',
+      'link_loan_bank',
+      'edit_imported_recurrence',
+    ].includes(operation)
+    const { error } = await supabase.rpc(
+      managed ? 'manage_finance' : 'command',
+      {
+        [managed ? 'action' : 'operation']: operation,
+        payload,
+        request_key: key,
+      },
+    )
     if (error) throw error
   }
   async function action(op: string, payload: Record<string, unknown>) {
@@ -219,6 +275,29 @@ export default function App() {
     } finally {
       setBusy(false)
     }
+  }
+  async function createTag(name: string) {
+    if (!supabase) throw new Error('Conecte o Supabase para criar tags.')
+    const existing = data.tags.find(
+      (tag) =>
+        tag.name.trim().toLocaleLowerCase('pt-BR') ===
+        name.trim().toLocaleLowerCase('pt-BR'),
+    )
+    if (existing) return existing
+    const { data: result, error } = await supabase.rpc('command', {
+      operation: 'save_tag',
+      payload: { name: name.trim() },
+      request_key: crypto.randomUUID(),
+    })
+    if (error) throw new Error(error.message)
+    const tag = { id: String(result.id), name: name.trim() }
+    setData((current) => ({
+      ...current,
+      tags: current.tags.some((t) => t.id === tag.id)
+        ? current.tags
+        : [...current.tags, tag],
+    }))
+    return tag
   }
   async function save(op: string, payload: Record<string, unknown>) {
     setBusy(true)
@@ -280,6 +359,8 @@ export default function App() {
         'installments',
         'recurrence_occurrences',
         'audit_events',
+        'financial_imports',
+        'financial_import_records',
       ]) {
         const rows: unknown[] = []
         for (let offset = 0; ; offset += 1000) {
@@ -288,7 +369,14 @@ export default function App() {
             .select('*')
             .order(table === 'daily_reviews' ? 'local_date' : 'id')
             .range(offset, offset + 999)
-          if (error) throw error
+          if (error) {
+            if (
+              table.startsWith('financial_import') &&
+              ['PGRST205', '42P01'].includes(error.code)
+            )
+              break
+            throw error
+          }
           rows.push(...data)
           if (data.length < 1000) break
         }
@@ -337,29 +425,15 @@ export default function App() {
     // oxlint-disable-next-line react/set-state-in-effect
     if (session && page === 'Futuro') void project()
   }, [session, page, data, project])
-  const txs = [...data.transactions].sort(
-    (a, b) =>
-      b.occurred_on.localeCompare(a.occurred_on) || a.id.localeCompare(b.id),
-  )
+  const txs = movementEvents(data)
   const balance = (id: string) => balances[id] ?? 0
   const total = data.accounts.reduce((s, a) => s + balance(a.id), 0),
     period = txs.filter((t) => t.occurred_on >= from && t.occurred_on <= until)
-  const income = period
-      .filter(
-        (t) =>
-          t.kind === 'income' &&
-          t.status === 'confirmed' &&
-          t.occurred_on <= today(),
-      )
-      .reduce((s, t) => s + t.amount_cents, 0),
-    expense = period
-      .filter(
-        (t) =>
-          t.kind === 'expense' &&
-          t.status === 'confirmed' &&
-          t.occurred_on <= today(),
-      )
-      .reduce((s, t) => s + t.amount_cents, 0)
+  const report = cashReport(txs, from, until, today())
+  const home = cashReport(txs, today().slice(0, 7) + '-01', today(), today())
+  const income = home.income,
+    expense = home.expense
+
   const accountName = (id: string | null) =>
       data.accounts.find((a) => a.id === id)?.name || 'Sem conta vinculada',
     cardName = (id: string | null) =>
@@ -387,13 +461,25 @@ export default function App() {
               )}
             </span>
             <div className="transaction-info">
-              <strong>{t.description}</strong>
+              <strong>
+                {isLoan(data, t)
+                  ? (t.related_bank_code || 'Nubank') + ' · '
+                  : ''}
+                {t.description}
+              </strong>
               <small>
                 {date(t.occurred_on)} ·{' '}
                 {t.payment_method === 'credit'
                   ? cardName(t.card_id)
                   : accountName(t.account_id)}{' '}
-                · {t.payment_method.toUpperCase()}
+                ·{' '}
+                {{
+                  pix: 'PIX',
+                  debit: 'Débito',
+                  credit: 'Crédito',
+                  transfer: 'Transferência',
+                  invoice_payment: 'Fatura / quitação',
+                }[t.payment_method] || t.payment_method}
               </small>
               <div className="tags">
                 {data.tags
@@ -403,27 +489,107 @@ export default function App() {
                   ))}
               </div>
             </div>
-            <span className="status">{statuses[t.status]}</span>
+            <span className="status">
+              {t.status === 'confirmed' && t.occurred_on <= today()
+                ? t.kind === 'income'
+                  ? 'Recebido'
+                  : 'Pago'
+                : t.kind === 'income'
+                  ? 'A receber'
+                  : 'A pagar'}
+            </span>
             <strong
               className={'amount ' + (t.kind === 'income' ? 'positive' : '')}
             >
               {t.kind === 'income' ? '+' : t.kind === 'expense' ? '−' : ''}{' '}
               {money(t.amount_cents)}
             </strong>
-            <button
-              className="icon-button"
-              aria-label={'Editar ' + t.description}
-              onClick={() => open('transaction', t)}
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              className="icon-button"
-              aria-label={'Excluir ' + t.description}
-              onClick={() => open('delete', t)}
-            >
-              <Trash2 size={14} />
-            </button>
+            {t.event_type === 'payment' &&
+              t.status !== 'reversed' &&
+              data.payments.find((p) => p.id === t.original_id)?.invoice_id && (
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    open('reverse_payment', {
+                      id: t.original_id,
+                      description: t.description,
+                    })
+                  }
+                >
+                  Desfazer
+                </button>
+              )}
+            {t.event_type === 'invoice' && (
+              <button
+                className="secondary"
+                onClick={() =>
+                  open(
+                    'payment',
+                    data.invoices.find((i) => i.id === t.original_id),
+                  )
+                }
+              >
+                Pagar
+              </button>
+            )}
+            {t.event_type !== 'transaction' && (
+              <button
+                className="icon-button"
+                aria-label={'Editar ' + t.description}
+                onClick={() =>
+                  open('event_edit', {
+                    ...t,
+                    amount_cents:
+                      t.event_type === 'invoice'
+                        ? data.invoices.find((i) => i.id === t.original_id)
+                            ?.total_cents
+                        : t.amount_cents,
+                  })
+                }
+              >
+                <Pencil size={14} />
+              </button>
+            )}
+            {t.event_type === 'transaction' &&
+              t.payment_method !== 'credit' && (
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    open(
+                      t.status === 'confirmed' && t.occurred_on <= today()
+                        ? 'unconfirm_transaction'
+                        : 'confirm_transaction',
+                      t,
+                    )
+                  }
+                >
+                  {t.status === 'confirmed' && t.occurred_on <= today()
+                    ? 'Desfazer'
+                    : t.kind === 'income'
+                      ? 'Receber'
+                      : 'Pagar'}
+                </button>
+              )}
+            {t.event_type === 'transaction' && (
+              <>
+                <button
+                  className="icon-button"
+                  aria-label={'Editar ' + t.description}
+                  onClick={() => open('transaction', t)}
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label={'Excluir ' + t.description}
+                  onClick={() => open('delete', t)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -755,7 +921,17 @@ export default function App() {
                       Ver todos <ArrowUpRight size={15} />
                     </button>
                   </div>
-                  {transactions(txs.slice(0, 5))}
+                  {transactions(
+                    [...txs]
+                      .filter(
+                        (t) =>
+                          t.status === 'confirmed' && t.occurred_on <= today(),
+                      )
+                      .sort((a, b) =>
+                        b.occurred_on.localeCompare(a.occurred_on),
+                      )
+                      .slice(0, 5),
+                  )}
                 </section>
                 <section className="panel">
                   <div className="panel-title">
@@ -823,29 +999,22 @@ export default function App() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
-                <input
-                  aria-label="Data inicial"
-                  type="date"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                />
-                <input
-                  aria-label="Data final"
-                  type="date"
-                  value={until}
-                  onChange={(e) => setUntil(e.target.value)}
+                <DateRangePicker
+                  from={from}
+                  until={until}
+                  onChange={(start, end) => {
+                    setFrom(start)
+                    setUntil(end)
+                  }}
                 />
                 <select
                   aria-label="Status"
                   value={status}
                   onChange={(e) => setStatus(e.target.value)}
                 >
-                  <option value="">Todos os status</option>
-                  {['confirmed', 'scheduled', 'estimated'].map((s) => (
-                    <option key={s} value={s}>
-                      {statuses[s]}
-                    </option>
-                  ))}
+                  <option value="">Todos os movimentos</option>
+                  <option value="paid">Pagos / recebidos</option>
+                  <option value="future">A pagar / receber</option>
                 </select>
                 <select
                   aria-label="Conta"
@@ -887,6 +1056,9 @@ export default function App() {
               <section className="panel">
                 <div className="panel-title">
                   <h2>Movimentos</h2>
+                  <small>
+                    Data de pagamento / recebimento · ordem crescente
+                  </small>
                 </div>
                 {transactions(
                   period.filter(
@@ -894,7 +1066,11 @@ export default function App() {
                       t.description
                         .toLocaleLowerCase('pt-BR')
                         .includes(search.toLocaleLowerCase('pt-BR')) &&
-                      (!status || t.status === status) &&
+                      (!status ||
+                        (status === 'paid'
+                          ? t.status === 'confirmed' && t.occurred_on <= today()
+                          : t.status !== 'confirmed' ||
+                            t.occurred_on > today())) &&
                       (!account ||
                         t.account_id === account ||
                         t.destination_account_id === account) &&
@@ -963,18 +1139,79 @@ export default function App() {
                   Adicionar cartão
                 </button>
               </div>
+              <div className="filters">
+                <DateRangePicker
+                  from={from}
+                  until={until}
+                  onChange={(start, end) => {
+                    setFrom(start)
+                    setUntil(end)
+                  }}
+                />
+              </div>
               <div className="accounts-grid">
-                {data.cards.map((c) => (
-                  <section className="credit-card" key={c.id}>
-                    <CreditCard size={25} />
-                    <span>MEU FINANCEIRO</span>
-                    <h2>{c.name}</h2>
-                    <p>
-                      Fecha dia {c.closing_day} · vence dia {c.due_day}
-                    </p>
-                    <small>{accountName(c.account_id)}</small>
-                  </section>
-                ))}
+                {data.cards.map((c) => {
+                  const invoices = data.invoices.filter(
+                    (i) =>
+                      i.card_id === c.id &&
+                      i.due_on >= from &&
+                      i.due_on <= until,
+                  )
+                  const loans = data.transactions.filter(
+                    (t) =>
+                      isLoan(data, t) &&
+                      t.related_bank_code === c.name &&
+                      t.occurred_on >= from &&
+                      t.occurred_on <= until,
+                  )
+                  const cardTotal = invoices.reduce(
+                    (s, i) => s + i.total_cents,
+                    0,
+                  )
+                  const loanTotal = loans.reduce(
+                    (s, t) => s + t.amount_cents,
+                    0,
+                  )
+                  const pending =
+                    invoices.reduce(
+                      (s, i) => s + i.total_cents - i.paid_cents,
+                      0,
+                    ) +
+                    loans
+                      .filter(
+                        (t) =>
+                          t.status !== 'confirmed' ||
+                          (t.paid_on || t.occurred_on) > today(),
+                      )
+                      .reduce((s, t) => s + t.amount_cents, 0)
+                  return (
+                    <section className="credit-card" key={c.id}>
+                      <CreditCard size={25} />
+                      <span>MEU FINANCEIRO</span>
+                      <h2>{c.name}</h2>
+                      <div className="bank-period-total">
+                        {money(cardTotal + loanTotal)}
+                      </div>
+                      <small>
+                        Cartão: {money(cardTotal)}
+                        {loanTotal > 0 && ` · Empréstimo: ${money(loanTotal)}`}
+                      </small>
+                      <p>
+                        Falta pagar: <b>{money(pending)}</b>
+                      </p>
+                      <p>
+                        Fecha{' '}
+                        {c.closing_day
+                          ? `dia ${c.closing_day}`
+                          : 'em dia a confirmar'}{' '}
+                        · vence dia {c.due_day}
+                      </p>
+                      <small>
+                        Pagamento pela conta {accountName(c.account_id)}
+                      </small>
+                    </section>
+                  )
+                })}
               </div>
               {!data.cards.length && (
                 <Empty
@@ -983,38 +1220,7 @@ export default function App() {
                   action={() => open('card')}
                 />
               )}
-              <section className="panel">
-                <div className="panel-title">
-                  <h2>Faturas</h2>
-                </div>
-                {invoices.map((i) => (
-                  <div className="list-row" key={i.id}>
-                    <div>
-                      <strong>{cardName(i.card_id)}</strong>
-                      <small>
-                        Vence {date(i.due_on)} · {statuses[i.status]}
-                      </small>
-                    </div>
-                    <span>
-                      {money(i.total_cents - i.paid_cents)}
-                      <small>Pago: {money(i.paid_cents)}</small>
-                    </span>
-                    {i.status !== 'paid' && (
-                      <button
-                        className="secondary"
-                        onClick={() => open('payment', i)}
-                      >
-                        Pagar
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {!invoices.length && (
-                  <p className="empty-inline">
-                    As faturas aparecem ao registrar compras no crédito.
-                  </p>
-                )}
-              </section>
+              <Obligations data={data} open={open} />
               <section className="panel">
                 <div className="panel-title">
                   <h2>Compras parceladas</h2>
@@ -1059,32 +1265,45 @@ export default function App() {
                 </button>
               </div>
               <section className="panel">
-                {data.recurrence_rules.map((r) => (
-                  <div className="list-row" key={r.id}>
-                    <div>
-                      <strong>{r.description}</strong>
-                      <small>
-                        Dia {r.day} · {accountName(r.account_id)} ·{' '}
-                        {r.active ? 'Ativa' : 'Pausada'}
-                      </small>
+                {data.recurrence_rules
+                  .filter(
+                    (r) =>
+                      !data.financial_import_records.some(
+                        (source) =>
+                          Array.isArray(source.payload.operational_rule_ids) &&
+                          (
+                            source.payload.operational_rule_ids as string[]
+                          ).includes(r.id),
+                      ),
+                  )
+                  .map((r) => (
+                    <div className="list-row" key={r.id}>
+                      <div>
+                        <strong>{r.description}</strong>
+                        <small>
+                          Dia {r.day} · {accountName(r.account_id)} ·{' '}
+                          {r.active ? 'Ativa' : 'Pausada'}
+                        </small>
+                      </div>
+                      <b>{money(r.amount_cents)}</b>
+                      <button
+                        className="icon-button"
+                        aria-label={'Editar ' + r.description}
+                        onClick={() => open('recurrence', r)}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() =>
+                          action('toggle_recurrence', { id: r.id })
+                        }
+                      >
+                        {r.active ? 'Pausar' : 'Retomar'}
+                      </button>
                     </div>
-                    <b>{money(r.amount_cents)}</b>
-                    <button
-                      className="icon-button"
-                      aria-label={'Editar ' + r.description}
-                      onClick={() => open('recurrence', r)}
-                    >
-                      <Pencil size={16} />
-                    </button>
-                    <button
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => action('toggle_recurrence', { id: r.id })}
-                    >
-                      {r.active ? 'Pausar' : 'Retomar'}
-                    </button>
-                  </div>
-                ))}
+                  ))}
                 {!data.recurrence_rules.length && (
                   <Empty
                     title="Menos esquecimentos, mais previsibilidade"
@@ -1115,94 +1334,107 @@ export default function App() {
           )}
           {page === 'Futuro' && (
             <>
-              <div className="filters">
-                <select
-                  aria-label="Conta projetada"
-                  value={account}
-                  onChange={(e) => setAccount(e.target.value)}
-                >
-                  <option value="">Todas as contas</option>
-                  {data.accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-                <label className="scenario">
-                  Ajuste de cenário (R$)
-                  <input
-                    value={scenario}
-                    onChange={(e) => setScenario(e.target.value)}
-                    placeholder="-100,00"
-                  />
-                </label>
-                <button className="secondary" onClick={() => void project()}>
-                  Simular
-                </button>
-              </div>
+              <ImportedFinance mode="forecast" />
+              <details className="advanced-fields">
+                <summary>Filtrar conta ou simular outro valor</summary>
+                <div className="filters">
+                  <select
+                    aria-label="Conta projetada"
+                    value={account}
+                    onChange={(e) => setAccount(e.target.value)}
+                  >
+                    <option value="">Todas as contas</option>
+                    {data.accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="scenario">
+                    Ajuste de cenário (R$)
+                    <input
+                      value={scenario}
+                      onChange={(e) => setScenario(e.target.value)}
+                      placeholder="-100,00"
+                    />
+                  </label>
+                  <button className="secondary" onClick={() => void project()}>
+                    Simular
+                  </button>
+                </div>
+              </details>
               <p className="footnote">
                 A simulação não altera dados. Considera saldo inicial,
                 movimentos, recorrências já geradas e faturas abertas. Faturas
                 sem conta vinculada entram apenas no consolidado. Não estima
-                juros/IOF.
+                juros/IOF. Entradas futuras respeitam as datas informadas.
+                Sessões sem data e acréscimos de faturas a conciliar ainda não
+                entram no calendário.
               </p>
               <section className="panel">
                 <div className="panel-title">
                   <h2>Projeção diária · próximos 90 dias</h2>
                 </div>
                 <ForecastChart rows={forecast} />
-                <ForecastCalendar rows={forecast} />
-                <div className="forecast-day table-header">
-                  <span>Data</span>
-                  <span>Saldo real de referência</span>
-                  <span>Previsto / cenário</span>
-                </div>
-                <div className="forecast-table">
-                  {forecast.map((f) => (
-                    <div className="forecast-day" key={f.day}>
-                      <span>{date(f.day)}</span>
-                      <span>{money(f.real_cents)}</span>
-                      <strong
-                        className={
-                          f.projected_cents < 0 ? 'negative' : 'positive'
-                        }
-                      >
-                        {money(f.projected_cents)}
-                      </strong>
-                    </div>
-                  ))}
-                </div>
+                <ForecastCalendar
+                  rows={forecast}
+                  events={txs}
+                  onNewMovement={(day) =>
+                    open('transaction', { occurred_on: day })
+                  }
+                />
+                <details className="forecast-details">
+                  <summary>Ver saldos dia a dia</summary>
+                  <div className="forecast-day table-header">
+                    <span>Data</span>
+                    <span>Saldo real de referência</span>
+                    <span>Previsto / cenário</span>
+                  </div>
+                  <div className="forecast-table">
+                    {forecast.map((f) => (
+                      <div className="forecast-day" key={f.day}>
+                        <span>{date(f.day)}</span>
+                        <span>{money(f.real_cents)}</span>
+                        <strong
+                          className={
+                            f.projected_cents < 0 ? 'negative' : 'positive'
+                          }
+                        >
+                          {money(f.projected_cents)}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               </section>
             </>
           )}
           {page === 'Relatórios' && (
             <>
+              <section className="panel cash-reality">
+                <p>Disponível na conta hoje</p>
+                <h2 className={total < 0 ? 'negative' : ''}>{money(total)}</h2>
+                <small>
+                  Saldo atual. Entradas futuras e cheque especial não estão
+                  incluídos.
+                </small>
+              </section>
               <div className="filters">
-                <input
-                  aria-label="Início do relatório"
-                  type="date"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                />
-                <input
-                  aria-label="Fim do relatório"
-                  type="date"
-                  value={until}
-                  onChange={(e) => setUntil(e.target.value)}
+                <DateRangePicker
+                  from={from}
+                  until={until}
+                  onChange={(start, end) => {
+                    setFrom(start)
+                    setUntil(end)
+                  }}
                 />
               </div>
               <div className="overview-grid">
                 {[
-                  ['Receitas realizadas', income],
-                  ['Despesas realizadas', expense],
-                  [
-                    'Despesas previstas',
-                    period
-                      .filter(
-                        (t) => t.kind === 'expense' && t.status !== 'confirmed',
-                      )
-                      .reduce((s, t) => s + t.amount_cents, 0),
-                  ],
+                  ['Já entrou no período', report.income],
+                  ['Já saiu no período', report.expense],
+                  ['Ainda falta pagar no período', report.plannedExpense],
+                  ['Ainda vai entrar no período', report.plannedIncome],
                 ].map(([title, value]) => (
                   <section className="metric-card" key={title}>
                     <p>{title}</p>
@@ -1210,13 +1442,18 @@ export default function App() {
                   </section>
                 ))}
               </div>
+              <p className="footnote">
+                Os valores a receber ainda não estão disponíveis para gastar. As
+                saídas incluem faturas e empréstimos; o pagamento de uma fatura
+                é contado uma única vez.
+              </p>
               <div className="dashboard-columns">
                 <section className="panel">
                   <div className="panel-title">
                     <h2>Despesas por tag</h2>
                   </div>
                   {data.tags.map((tag) => {
-                    const value = period
+                    const value = report.realized
                       .filter(
                         (t) =>
                           t.kind === 'expense' && t.tag_ids.includes(tag.id),
@@ -1228,7 +1465,7 @@ export default function App() {
                         <div className="bar">
                           <i
                             style={{
-                              width: `${Math.min(100, (value / (expense || 1)) * 100)}%`,
+                              width: `${Math.min(100, (value / (report.expense || 1)) * 100)}%`,
                             }}
                           />
                         </div>
@@ -1236,28 +1473,40 @@ export default function App() {
                       </div>
                     )
                   })}
+                  <div className="report-row">
+                    <span>Sem tags</span>
+                    <b>
+                      {money(
+                        report.realized
+                          .filter(
+                            (t) => t.kind === 'expense' && !t.tag_ids.length,
+                          )
+                          .reduce((sum, t) => sum + t.amount_cents, 0),
+                      )}
+                    </b>
+                  </div>
                   <p className="footnote">
-                    Grupos por tags se sobrepõem. O total geral conta cada
-                    compra uma vez. Faturas e transferências não somam nova
-                    despesa.
+                    Relatório de caixa: pagamentos de fatura entram uma vez;
+                    compras no crédito e transferências não duplicam as saídas.
+                    Grupos por tags podem se sobrepor.
                   </p>
                 </section>
                 <section className="panel">
                   <div className="panel-title">
                     <h2>Por forma de pagamento</h2>
                   </div>
-                  {['pix', 'debit', 'credit'].map((method) => (
+                  {['pix', 'debit', 'invoice_payment'].map((method) => (
                     <div className="list-row" key={method}>
                       <span>
                         {method === 'debit'
                           ? 'DÉBITO'
-                          : method === 'credit'
-                            ? 'CRÉDITO'
+                          : method === 'invoice_payment'
+                            ? 'FATURAS / QUITAÇÕES'
                             : 'PIX'}
                       </span>
                       <b>
                         {money(
-                          period
+                          report.realized
                             .filter(
                               (t) =>
                                 t.kind === 'expense' &&
@@ -1270,6 +1519,7 @@ export default function App() {
                   ))}
                 </section>
               </div>
+              <FixedExpenses data={data} from={from} until={until} />
             </>
           )}
           {page === 'Lembretes' && (
@@ -1290,6 +1540,25 @@ export default function App() {
               </div>
               <div className="section-title">
                 <h2>Seus lembretes</h2>
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await testNotification()
+                      setNotice(
+                        'Teste enviado ao navegador. Se não aparecer, confira as notificações do navegador no Windows e o modo Não perturbe. Este teste não valida o envio agendado.',
+                      )
+                    } catch (e) {
+                      setError(err(e))
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  Testar notificação
+                </button>
                 <button
                   className="secondary"
                   disabled={busy || !pushConfigured}
@@ -1438,6 +1707,15 @@ export default function App() {
               </section>
             </div>
           )}
+          {['Recorrências', 'Configurações'].includes(page) && (
+            <ImportedFinance
+              key={page}
+              onChanged={refresh}
+              tags={data.tags}
+              createTag={createTag}
+              mode={page === 'Recorrências' ? 'recurrences' : 'all'}
+            />
+          )}
           <footer>
             MEU FINANCEIRO <span>Mais consciência em cada escolha.</span>
             <span className="footer-end">BRL · America/Sao_Paulo</span>
@@ -1466,8 +1744,9 @@ export default function App() {
           data={data}
           busy={busy}
           error={error}
-          close={() => setModal(null)}
+          close={closeModal}
           save={save}
+          createTag={createTag}
         />
       )}
     </div>
@@ -1531,51 +1810,6 @@ function ForecastChart({ rows }: { rows: Forecast[] }) {
         <strong>{money(rows.at(-1)!.projected_cents)} ao final</strong>
         <span>{date(rows.at(-1)!.day)}</span>
       </div>
-    </div>
-  )
-}
-function ForecastCalendar({ rows }: { rows: Forecast[] }) {
-  const months = [...new Set(rows.map((row) => row.day.slice(0, 7)))]
-  return (
-    <div className="calendar-grid">
-      {months.map((month) => {
-        const entries = rows.filter((row) => row.day.startsWith(month))
-        const first = new Date(entries[0].day + 'T12:00:00Z')
-        const offset = (first.getUTCDay() + 6) % 7
-        return (
-          <section className="calendar-month" key={month}>
-            <h3>
-              {first.toLocaleDateString('pt-BR', {
-                month: 'long',
-                year: 'numeric',
-                timeZone: 'UTC',
-              })}
-            </h3>
-            <div className="calendar-cells">
-              {['S', 'T', 'Q', 'Q', 'S', 'S', 'D'].map((d, i) => (
-                <small key={i}>{d}</small>
-              ))}
-              {Array.from({ length: offset }, (_, i) => (
-                <span key={'empty' + i} />
-              ))}
-              {entries.map((row) => (
-                <div
-                  className={
-                    row.projected_cents < 0
-                      ? 'calendar-cell below'
-                      : 'calendar-cell'
-                  }
-                  key={row.day}
-                  title={`${row.day}: ${money(row.projected_cents)}`}
-                >
-                  <span>{Number(row.day.slice(8))}</span>
-                  <small>{money(row.projected_cents)}</small>
-                </div>
-              ))}
-            </div>
-          </section>
-        )
-      })}
     </div>
   )
 }

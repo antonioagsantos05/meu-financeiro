@@ -22,12 +22,17 @@ export interface Transaction {
   version: number
   deleted_at: string | null
   tag_ids: string[]
+  paid_on?: string | null
+  related_bank_code?: string | null
+  event_type?: 'transaction' | 'payment' | 'invoice' | 'income_estimate'
+  original_id?: string
+  source_type?: string
 }
 
 export interface Card {
   id: string
   name: string
-  closing_day: number
+  closing_day: number | null
   due_day: number
   account_id: string | null
 }
@@ -39,6 +44,8 @@ export interface Invoice {
   status: string
   total_cents: number
   paid_cents: number
+  version?: number
+  label?: string | null
 }
 
 export interface Plan {
@@ -65,6 +72,7 @@ export interface Rule {
   start_on: string
   end_on: string | null
   active: boolean
+  tag_ids?: string[]
 }
 
 export interface Reminder {
@@ -80,11 +88,28 @@ export interface Payment {
   account_id: string
   amount_cents: number
   paid_on: string
+  invoice_id?: string | null
+  installment_plan_id?: string | null
+  kind?: string
+  reversed_at?: string | null
+  reversal_reason?: string | null
+  version?: number
+  label?: string | null
 }
 
 export interface Review {
   local_date: string
   had_spending: boolean
+}
+export interface ImportedRecord {
+  id: string
+  record_type: string
+  source_key: string
+  payload: Record<string, unknown>
+  needs_review: boolean
+  linked_id: string | null
+  review_reason: string | null
+  version?: number
 }
 
 export interface Data {
@@ -98,6 +123,7 @@ export interface Data {
   reminder_rules: Reminder[]
   payments: Payment[]
   daily_reviews: Review[]
+  financial_import_records: ImportedRecord[]
 }
 
 export const emptyData: Data = {
@@ -111,4 +137,5 @@ export const emptyData: Data = {
   reminder_rules: [],
   payments: [],
   daily_reviews: [],
+  financial_import_records: [],
 }

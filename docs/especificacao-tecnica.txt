@@ -1,0 +1,171 @@
+Especificação Técnica
+Arquitetura, banco de dados, contratos, fluxos e diagramas de sequência
+Projeto: Meu Financeiro  |  Versão: 1.0 — especificação para implementação por IA  |  Data: 03/11/2026
+Status: base aprovada em conversa; itens marcados como DECISÃO PENDENTE não devem ser presumidos pelo agente de desenvolvimento.
+1. Contrato de implementação para agente de IA
+Implementar v1.0 com React + TypeScript + Vite, Supabase Auth/PostgreSQL/RLS, Netlify, PWA Android. Tailwind CSS é recomendação, ainda não aprovação formal. Não criar signup público, não integrar bancos e não utilizar dados ilustrativos como transações reais. Antes de codificar decisões pendentes, solicitar validação ou documentar escolha reversível.
+Trabalhar em incrementos pequenos com migrações SQL versionadas, testes, lint, typecheck e build a cada entrega.
+Toda regra financeira crítica deve rodar em transação no banco (RPC/função), não depender apenas do frontend.
+Persistência real em Supabase; protótipos locais não substituem CRUD, segurança e integridade.
+Tratar idempotência, concorrência, timezone, arredondamento e histórico como requisitos de primeira classe.
+2. Arquitetura lógica
+
+Figura 1 — Visão lógica dos componentes (setas representam relações, não fluxo obrigatório de tráfego).
+Fluxo real: o navegador recebe o bundle estático via Netlify e chama diretamente Auth/PostgREST/RPC do Supabase usando JWT e chave pública anon/publishable; chave service_role nunca deve ir ao cliente. O agendador/servidor de push usa credenciais protegidas, autenticação e autorização próprias. Netlify não é proxy obrigatório entre frontend e Supabase.
+3. Estrutura sugerida do repositório
+src/app (rotas/providers), src/features/{auth,accounts,transactions,cards,recurrences,forecast,tags,reminders,reports}, src/components/ui, src/lib/{supabase,money,dates}, src/domain (tipos e invariantes), src/test; supabase/migrations, supabase/functions; public/manifest.webmanifest e service-worker; docs/adr; tests/e2e.
+4. Modelo de dados proposto
+Tabela
+Campos essenciais e observações
+profiles
+id uuid PK = auth.users.id; timezone; preferences_json
+accounts
+id, owner_id, bank_code, name, opening_balance_cents, overdraft_limit_cents, active, version
+cards
+id, owner_id, account_id nullable, issuer_bank_code, name, closing_day, due_day, active
+transactions
+id, owner_id, kind [income/expense/transfer], description, amount_cents, occurred_on, status, payment_method, account_id nullable, card_id nullable, source_type, version, deleted_at
+installment_plans
+id, owner_id, transaction_id, installment_count, total_cents, status, created_at
+installments
+id, owner_id, plan_id, ordinal, amount_cents, invoice_id, due_on, status, settled_at
+invoices
+id, owner_id, card_id, period_key, closing_on, due_on, status, total_cents (derivado ou snapshot auditável)
+payments
+id, owner_id, kind, account_id, invoice_id nullable, installment_plan_id nullable, amount_cents, paid_on, idempotency_key, reversal_of
+recurrence_rules
+id, owner_id, kind, amount_cents, frequency, day_rule, start_on, end_on, active, template_json
+recurrence_occurrences
+id, owner_id, rule_id, occurrence_date, transaction_id, status; UNIQUE(rule_id, occurrence_date)
+tags
+id, owner_id, name, normalized_name, color nullable, deleted_at; UNIQUE(owner_id, normalized_name) para ativas
+transaction_tags
+owner_id, transaction_id, tag_id; UNIQUE(transaction_id, tag_id)
+reminder_rules
+id, owner_id, title, local_time, weekdays, timezone, enabled, privacy_mode
+push_subscriptions
+id, owner_id, endpoint, p256dh, auth, last_seen_at, revoked_at (dados protegidos)
+reminder_deliveries
+id, owner_id, rule_id, local_date, scheduled_time, status; chave única por ocorrência
+daily_reviews
+owner_id, local_date, reviewed_at, had_spending; UNIQUE(owner_id, local_date)
+audit_events
+id, owner_id, entity_type, entity_id, action, before_json, after_json, at
+idempotency_keys
+owner_id, key, operation, result_json, created_at
+Recomendação: evitar duplicar saldo como campo mutável. Calcular saldo a partir de saldo de abertura + lançamentos bancários efetivados; se materializar snapshots, garantir atualização transacional e reconciliação. Separar compra no crédito de pagamento bancário da fatura por modelo de ledger/eventos, sem contar a compra duas vezes.
+5. Invariantes e validações SQL
+amount_cents > 0; installment_count >= 1; ordinal entre 1 e N; soma das parcelas = total_cents.
+owner_id obrigatório em todas as tabelas de domínio; FKs compostas ou validação transacional impedem referência a entidade de outro usuário.
+PIX/débito requer account_id e proíbe card_id; crédito requer card_id; transferências requerem origem e destino distintos (modelar em tabela própria ou campos explícitos).
+Datas de competência, vencimento e efetivação distintas; armazenar instantes em timestamptz UTC e datas locais em date quando apropriado.
+Regras de exclusão lógica, reversão e versionamento otimista para evitar perda de atualização.
+Índices em owner_id + occurred_on, card_id + period_key, owner_id + status, recorrências e lembretes.
+6. Autenticação, autorização e segurança
+Supabase Auth com conta única provisionada administrativamente; desabilitar signup público. Habilitar RLS em TODAS as tabelas de dados e políticas USING/WITH CHECK (owner_id = auth.uid()). Restringir funções SECURITY DEFINER com search_path explícito, autorização interna e privilégios mínimos. Nunca colocar service_role no frontend. Não depender apenas de ocultar rotas no React.
+HTTPS, CSP adequada, validação no servidor, rate limits quando aplicável, secrets por ambiente, backup/exportação com autenticação, nenhuma informação financeira sensível no corpo do push exibido na tela bloqueada por padrão.
+7. Fluxo de lançamento
+
+Figura 2 — Fluxo de decisão de método de pagamento e persistência.
+Comando createExpense: amount_cents, description, occurred_on, payment_method, account_id ou card_id, installment_count (somente crédito), tag_ids[], idempotency_key. Retornar IDs e projeção atualizada. Em cartão, atribuir parcelas às faturas conforme fechamento e vencimento configurados, usando testes de limites de ciclo.
+8. Sequência: compra parcelada
+
+Figura 3 — Sequência de registro de compra; persistência e parcelas atômicas.
+9. Fluxo de quitação e sequência
+
+Figura 4 — Fluxo de quitação antecipada com preservação de histórico.
+
+Figura 5 — Sequência de quitação com controle de concorrência.
+Operação settlePlan(plan_id, paid_amount_cents, paid_on, funding_account_id, expected_version, idempotency_key): validar estado e vínculo; impedir dupla liquidação; registrar pagamento real; marcar parcelas futuras como encerradas/ajustadas, sem excluir as pagas; produzir eventos de auditoria; atualizar projeções. Para crédito, exigir confirmação de antecipação efetiva no emissor e modelar reflexo na fatura. Desconto/juros deve ser representado explicitamente, não escondido em mudança do valor original.
+10. Projeção financeira — algoritmo determinístico
+Saldo real por conta em D = opening_balance + soma(entradas efetivadas até D) − soma(saídas efetivadas até D).
+Saldo previsto por dia = saldo real de referência + ocorrências futuras confirmadas/agendadas/estimadas, discriminadas por status e conta.
+Compra em cartão não reduz saldo bancário; somente pagamento previsto/efetivado da fatura afeta caixa.
+Recorrências são expandidas por horizonte, com chave única; não criar ocorrências duplicadas em reprocessamento.
+Cheques especiais: saldo negativo continua negativo; limite disponível é métrica separada; juros/IOF apenas com parâmetros e regra de cálculo definida.
+Ordenação estável para múltiplos eventos no mesmo dia e tratamento explícito de datas não úteis, se política futura exigir.
+11. Notificações e sequência
+
+Figura 6 — Sequência de disparo Web Push com deduplicação.
+PWA com manifest, service worker, permissão explícita e subscription armazenada com segurança. Defaults: 13:30 e 20:00 em America/Sao_Paulo, alteráveis. Agendador executa periodicamente e seleciona ocorrências por timezone e weekdays; grava chave única antes do envio e registra resultado. Ao tocar, deep link para /movimentos/novo. Verificar viabilidade e custo de cron/Edge Functions/serviço externo antes da decisão definitiva. Push pode atrasar ou não chegar offline/economia de bateria.
+12. Contratos de operações / RPCs
+Operação
+Entrada essencial
+Saída / garantia
+create_transaction
+dados, tags[], idempotency_key
+transaction_id, version; validação atômica
+update_transaction
+id, patch, expected_version
+version; bloqueia alterações destrutivas
+delete_transaction
+id, expected_version, reason
+soft delete + audit
+settle_installment_plan
+id, amount, date, funding, version, key
+pagamento + fechamento de pendências
+pay_invoice
+invoice_id, account_id, date, amount, key
+baixa bancária única + fatura
+transfer_between_accounts
+from, to, amount, date, key
+duas pernas vinculadas, total neutro
+generate_recurrences
+horizon_start/end
+upsert idempotente por regra+data
+get_forecast
+account_ids, start/end, scenario
+dias com saldo e composição
+mark_daily_review
+local_date, had_spending
+upsert único e streak derivado
+Não expor RPCs de escrita com privilégios amplos; as operações podem ser implementadas como funções Postgres seguras ou backend server-side quando necessário. API concreta, tipos TypeScript e OpenAPI devem ser gerados/atualizados na implementação.
+13. Estratégia de testes automatizados
+Camada
+Casos mínimos
+Unidade
+Centavos e resíduos: R$ 100 / 3 = 33,34 + 33,33 + 33,33; datas/ciclos; normalização de tags
+Domínio
+Crédito não debita conta; fatura debita uma vez; transferência neutra; recorrência não duplica
+Banco / integração
+RLS cruzada negada; idempotência; rollback; corrida de quitação; versionamento
+E2E Playwright
+Login, PIX, débito, compra 3x, edição, quitação, tags, filtros, lembretes
+PWA / push
+Instalação Android, permissão, deep link, ausência de duplicatas, offline e atraso
+Regressão
+Saldo real ≠ previsto; pagamento parcial; mês com 28/29/30/31 dias; timezone
+14. Deploy, ambientes e observabilidade
+Ambientes dev e produção separados; migrações reproduzíveis, seeds fictícios e sem dados pessoais.
+Netlify com build Vite, variáveis públicas apenas para URL e chave pública do Supabase; segredos somente em backend.
+CI: npm ci → lint → typecheck → test → build → testes de migração e RLS.
+Logs sem dados financeiros desnecessários; erros estruturados e monitoramento de falhas de cron/push.
+Backups/exports testados com restauração; política de retenção e custo a definir.
+15. Plano de execução para IA (ordem obrigatória)
+Fase
+Entregável / gate
+0
+ADR de decisões pendentes; critérios de aceite alinhados
+1
+Scaffold Vite/React/TS, UI shell, rotas, design system, lint/testes
+2
+Migrações, RLS, Auth, seeds fictícios e testes de isolamento
+3
+Contas, movimentos, tags, transferências, CRUD auditável
+4
+Cartões, faturas, parcelas, quitação e testes de invariantes
+5
+Recorrências, projeções, cenários e cheque especial
+6
+Relatórios, lembretes, Web Push e revisão diária
+7
+Exportação, hardening, acessibilidade, E2E Android e deploy
+16. Definition of Done / proibições explícitas
+Nenhuma tela com botões fictícios ou dados hardcoded apresentados como reais.
+Nenhuma regra de saldo, fatura ou quitação dependente apenas de estado React.
+Nenhum campo category_id obrigatório: classificação por tags opcionais apenas.
+Nenhuma integração Open Finance na v1.0.
+Nenhuma alegação de custo zero ou push garantido sem validação de planos e teste em dispositivo.
+Cada PR inclui testes, migrations (se houver), screenshots de UI e atualização do contrato/ADR.
+17. Pendências de decisão e riscos
+Confirmar cartões e ciclos; contas/saldos iniciais; taxas do cheque especial; definição contábil de quitação antecipada de cartão; offline; provedor cron/push; recuperação de conta única; exportação/restauração. Registrar em docs/adr/ antes de implementar escolhas irreversíveis. Este documento é uma especificação técnica orientadora, não substitui teste de integração com Supabase e Android.
